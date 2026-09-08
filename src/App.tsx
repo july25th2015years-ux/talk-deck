@@ -15,6 +15,7 @@ import confetti from 'canvas-confetti';
 import { MessageCircleHeart, Sparkles } from 'lucide-react';
 
 const FAVORITES_STORAGE_KEY = 'talkdeck_favorites';
+const SEEN_STORAGE_KEY = 'talkdeck_seen_topic_ids';
 
 export const App: React.FC = () => {
   // Config & Modals
@@ -34,6 +35,18 @@ export const App: React.FC = () => {
   const [history, setHistory] = useState<Topic[]>([PRESET_TOPICS[0]]);
   const [historyIndex, setHistoryIndex] = useState(0);
   const [isFlipped, setIsFlipped] = useState(false);
+
+  // Cycle tracking (questions shown so far without repetition)
+  const [seenTopicIds, setSeenTopicIds] = useState<Set<string>>(() => {
+    try {
+      const raw = localStorage.getItem(SEEN_STORAGE_KEY);
+      if (raw) {
+        return new Set(JSON.parse(raw));
+      }
+    } catch {}
+    return new Set([PRESET_TOPICS[0].id]);
+  });
+  const [cycleCompletedToast, setCycleCompletedToast] = useState(false);
 
   // Favorites
   const [favorites, setFavorites] = useState<Topic[]>([]);
@@ -65,6 +78,16 @@ export const App: React.FC = () => {
     }
   };
 
+  // Helper to update seen topic IDs in state and localStorage
+  const updateSeenTopicIds = useCallback((newSet: Set<string>) => {
+    setSeenTopicIds(newSet);
+    try {
+      localStorage.setItem(SEEN_STORAGE_KEY, JSON.stringify(Array.from(newSet)));
+    } catch (e) {
+      console.error('Failed to persist seen topic IDs:', e);
+    }
+  }, []);
+
   // Combine Preset + Custom Topics
   const allAvailableTopics = useMemo(() => {
     return [...customTopics, ...PRESET_TOPICS];
@@ -79,22 +102,78 @@ export const App: React.FC = () => {
     });
   }, [allAvailableTopics, selectedCategory, selectedLevel]);
 
-  // Draw Next Topic
+  // Count of topics in current filter that have been seen
+  const seenInFilterCount = useMemo(() => {
+    return filteredTopics.filter((t) => seenTopicIds.has(t.id)).length;
+  }, [filteredTopics, seenTopicIds]);
+
+  // Draw Next Topic (Guarantees NO repeats until full cycle finishes)
   const handleNextTopic = useCallback(() => {
     if (filteredTopics.length === 0) return;
 
-    // Pick random topic different from current if possible
-    let next: Topic;
-    if (filteredTopics.length === 1) {
-      next = filteredTopics[0];
-    } else {
-      const candidates = filteredTopics.filter((t) => t.id !== currentTopic.id);
+    // 1. Find unshown topics in the current active filter
+    const unshown = filteredTopics.filter((t) => !seenTopicIds.has(t.id));
+
+    // 2. If ALL topics in this filter have been shown (1周完了!)
+    if (unshown.length === 0) {
+      // Show celebratory notification
+      setCycleCompletedToast(true);
+      setTimeout(() => setCycleCompletedToast(false), 3500);
+
+      try {
+        confetti({
+          particleCount: 60,
+          spread: 80,
+          origin: { y: 0.6 },
+          colors: ['#a855f7', '#ec4899', '#38bdf8', '#fbbf24'],
+        });
+      } catch {}
+
+      // Reset seen status for topics belonging to this filter
+      const nextSeen = new Set(seenTopicIds);
+      filteredTopics.forEach((t) => nextSeen.delete(t.id));
+
+      // Pick a random topic for the new round
+      const candidates = filteredTopics.length > 1
+        ? filteredTopics.filter((t) => t.id !== currentTopic.id)
+        : filteredTopics;
       const randomIndex = Math.floor(Math.random() * candidates.length);
-      next = candidates[randomIndex];
+      const next = candidates[randomIndex];
+
+      nextSeen.add(next.id);
+      updateSeenTopicIds(nextSeen);
+
+      setIsFlipped(false);
+      setCurrentTopic(next);
+
+      const newHistory = history.slice(0, historyIndex + 1);
+      newHistory.push(next);
+      setHistory(newHistory);
+      setHistoryIndex(newHistory.length - 1);
+      return;
     }
 
-    // Little celebration for Lv.3 or deep questions
-    if (next.level === 3) {
+    // 3. Normal draw: pick strictly from unshown candidates
+    const candidates = unshown.filter((t) => t.id !== currentTopic.id);
+    const targetPool = candidates.length > 0 ? candidates : unshown;
+    const randomIndex = Math.floor(Math.random() * targetPool.length);
+    const next = targetPool[randomIndex];
+
+    const nextSeen = new Set(seenTopicIds);
+    nextSeen.add(next.id);
+    updateSeenTopicIds(nextSeen);
+
+    // If this was the last question of the cycle
+    if (unshown.length === 1) {
+      try {
+        confetti({
+          particleCount: 40,
+          spread: 60,
+          origin: { y: 0.7 },
+          colors: ['#a855f7', '#ec4899', '#6366f1'],
+        });
+      } catch {}
+    } else if (next.level === 3) {
       try {
         confetti({
           particleCount: 25,
@@ -102,20 +181,17 @@ export const App: React.FC = () => {
           origin: { y: 0.75 },
           colors: ['#a855f7', '#ec4899', '#6366f1'],
         });
-      } catch {
-        // Ignore in environments without canvas
-      }
+      } catch {}
     }
 
     setIsFlipped(false);
     setCurrentTopic(next);
 
-    // Update history
     const newHistory = history.slice(0, historyIndex + 1);
     newHistory.push(next);
     setHistory(newHistory);
     setHistoryIndex(newHistory.length - 1);
-  }, [filteredTopics, currentTopic.id, history, historyIndex]);
+  }, [filteredTopics, seenTopicIds, currentTopic.id, history, historyIndex, updateSeenTopicIds]);
 
   // Navigate Previous Topic in History
   const handlePrevTopic = useCallback(() => {
@@ -127,17 +203,30 @@ export const App: React.FC = () => {
     }
   }, [history, historyIndex]);
 
-  // If filter changes and current topic doesn't match, pick a new matching one
+  // Reset cycle manually
+  const handleResetCycle = useCallback(() => {
+    if (window.confirm('現在のカテゴリ・親密度の出題履歴をリセットして、最初からシャッフルしますか？')) {
+      const nextSeen = new Set(seenTopicIds);
+      filteredTopics.forEach((t) => nextSeen.delete(t.id));
+      nextSeen.add(currentTopic.id);
+      updateSeenTopicIds(nextSeen);
+    }
+  }, [seenTopicIds, filteredTopics, currentTopic.id, updateSeenTopicIds]);
+
+  // If filter changes and current topic doesn't match, pick an unshown one in the new filter
   useEffect(() => {
     if (filteredTopics.length > 0) {
       const isCurrentMatching = filteredTopics.some((t) => t.id === currentTopic.id);
       if (!isCurrentMatching) {
-        const next = filteredTopics[Math.floor(Math.random() * filteredTopics.length)];
+        const unshown = filteredTopics.filter((t) => !seenTopicIds.has(t.id));
+        const pool = unshown.length > 0 ? unshown : filteredTopics;
+        const next = pool[Math.floor(Math.random() * pool.length)];
         setCurrentTopic(next);
         setIsFlipped(false);
+        updateSeenTopicIds(new Set([...seenTopicIds, next.id]));
       }
     }
-  }, [filteredTopics, currentTopic.id]);
+  }, [filteredTopics, currentTopic.id, seenTopicIds, updateSeenTopicIds]);
 
   // Toggle Favorite
   const handleToggleFavorite = () => {
@@ -182,6 +271,8 @@ export const App: React.FC = () => {
     setCustomTopics((prev) => [newTopic, ...prev]);
     setCurrentTopic(newTopic);
     setIsFlipped(false);
+    updateSeenTopicIds(new Set([...seenTopicIds, newTopic.id]));
+
     const newHistory = history.slice(0, historyIndex + 1);
     newHistory.push(newTopic);
     setHistory(newHistory);
@@ -194,9 +285,7 @@ export const App: React.FC = () => {
         origin: { y: 0.6 },
         colors: ['#a855f7', '#38bdf8', '#fbbf24'],
       });
-    } catch {
-      // Ignore
-    }
+    } catch {}
   };
 
   // Append questions from AI expand
@@ -231,7 +320,15 @@ export const App: React.FC = () => {
   const todayTip = tips[new Date().getDate() % tips.length];
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-between selection:bg-indigo-500 selection:text-white">
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-between selection:bg-indigo-500 selection:text-white relative">
+      {/* 1周完了トースト通知 */}
+      {cycleCompletedToast && (
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 bg-gradient-to-r from-purple-600 to-indigo-600 text-white text-xs sm:text-sm font-bold px-5 py-3 rounded-2xl shadow-2xl border border-purple-400/60 flex items-center gap-2 animate-slide-up">
+          <Sparkles className="w-4 h-4 text-amber-300" />
+          <span>🎉 すべての質問を1周しました！デッキをリシャッフルしました</span>
+        </div>
+      )}
+
       {/* Top Header */}
       <div>
         <Header
@@ -297,7 +394,9 @@ export const App: React.FC = () => {
               canPrev={historyIndex > 0}
               onFlip={() => setIsFlipped((prev) => !prev)}
               isFlipped={isFlipped}
-              remainingCount={filteredTopics.length}
+              seenCount={seenInFilterCount}
+              totalCount={filteredTopics.length}
+              onResetCycle={handleResetCycle}
             />
           </>
         )}
