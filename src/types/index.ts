@@ -1,12 +1,13 @@
-export type Category = 
+export type Category =
   | 'all'
-  | 'business' 
-  | 'first-meet' 
-  | 'friends' 
-  | 'dating' 
-  | 'deep-questions';
+  | 'relationship'
+  | 'money-values'
+  | 'lifestyle'
+  | 'past-inner'
+  | 'future'
+  | 'intimacy';
 
-export type IntimacyLevel = 1 | 2 | 3; // 1: 初対面・安心, 2: 打ち解け, 3: 親密・ディープ
+export type IntimacyLevel = 1 | 2 | 3; // 1: ちょっと踏み込む, 2: 本音・価値観, 3: ディープ・未来
 
 export interface Topic {
   id: string;
@@ -22,6 +23,7 @@ export interface Topic {
 export interface CategoryMetadata {
   id: Category;
   label: string;
+  shortLabel: string;
   emoji: string;
   color: string;
   bgGradient: string;

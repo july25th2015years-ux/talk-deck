@@ -1,4 +1,4 @@
-import type { GeminiConfig, Topic } from '../types';
+import type { Category, GeminiConfig, Topic } from '../types';
 
 const STORAGE_KEY = 'talkdeck_gemini_config';
 
@@ -29,8 +29,9 @@ export function removeStoredGeminiConfig(): void {
 }
 
 interface GenerateTopicParams {
-  category: string;
-  relationship: string;
+  scene: string;
+  categoryId: Exclude<Category, 'all'>;
+  categoryLabel: string;
   mood: string;
   notes?: string;
 }
@@ -43,29 +44,32 @@ export async function generateCustomTopicWithGemini(
     throw new Error('Gemini APIキーが設定されていません。設定画面からキーを入力してください。');
   }
 
-  const model = config.model || 'gemini-1.5-flash';
+  const model = config.model || 'gemini-2.5-flash';
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(config.apiKey)}`;
 
   const prompt = `
-あなたは優秀なコミュニケーション・雑談のプロフェッショナルです。
-以下のシチュエーションに合わせて、気まずい沈黙をなくし、自然に盛り上がって相手との心理的距離が縮まる「雑談の話題」を1つ考案してください。
+あなたは付き合って2ヶ月程度の恋人同士が、より親密になりお互いの価値観を深く知るためのトークカード作成プロデューサーです。
+2人は一緒にスマホ画面を見ながらカードを引き、交代で答え合います。リベシティ会員同士なので、お金や価値観マップ、5つの力などの話題もオープンに話せます。
 
-【シチュエーション条件】
-- カテゴリ/場面: ${params.category}
-- 相手との関係性: ${params.relationship}
-- 場の雰囲気・目的: ${params.mood}
-${params.notes ? `- 特記事項/キーワード: ${params.notes}` : ''}
+以下の条件に合わせて、少し踏み込んでいて温かく盛り上がる「トークカード」を1つ作成してください。
+口調は恋人同士の自然なタメ口で統一してください。
+
+【条件】
+- シチュエーション: ${params.scene}
+- テーマ: ${params.categoryLabel}
+- 雰囲気・ねらい: ${params.mood}
+${params.notes ? `- キーワード: ${params.notes}` : ''}
 
 以下のJSONフォーマットのみを返してください。余計なマークダウン装飾や前置きは不要です。
 {
-  "title": "メインの質問・話題の投げかけ文（相手が答えやすく自然な敬体または親しい口調）",
+  "title": "メインの質問文（恋人同士の自然なタメ口・お互いが交代で答えられる表現）",
   "depthQuestions": [
-    "話を広げるための深掘り質問1",
-    "話を広げるための深掘り質問2",
-    "話を広げるための深掘り質問3"
+    "話をさらに広げる深掘り質問1（自然なタメ口）",
+    "話をさらに広げる深掘り質問2（自然なタメ口）",
+    "話をさらに広げる深掘り質問3（自然なタメ口）"
   ],
-  "expansionTips": "会話をスムーズに弾ませるためのコツや、自分から話すべき具体例の出し方",
-  "cautionTips": "気をつけるべきNGな聞き方や地雷ポイント"
+  "expansionTips": "2人で楽しく会話を広げるコツ（親しみやすい口調）",
+  "cautionTips": "お互いが安心して話すために大切にしたいポイント（優しい口調）"
 }
 `;
 
@@ -81,7 +85,7 @@ ${params.notes ? `- 特記事項/キーワード: ${params.notes}` : ''}
         },
       ],
       generationConfig: {
-        temperature: 0.7,
+        temperature: 0.75,
         response_mime_type: 'application/json',
       },
     }),
@@ -100,18 +104,19 @@ ${params.notes ? `- 特記事項/キーワード: ${params.notes}` : ''}
   }
 
   try {
-    // クリーニングしてJSONパース
     const cleanedText = text.trim().replace(/^```json\s*/i, '').replace(/```\s*$/i, '');
     const parsed = JSON.parse(cleanedText);
 
     return {
       id: `ai-${Date.now()}`,
-      category: 'deep-questions',
+      category: params.categoryId,
       level: 2,
-      title: parsed.title || '最近どんなことで心が動きましたか？',
-      depthQuestions: Array.isArray(parsed.depthQuestions) ? parsed.depthQuestions : ['それについてもっと教えてください'],
-      expansionTips: parsed.expansionTips || '相手の言葉を繰り返しながら共感を示しましょう。',
-      cautionTips: parsed.cautionTips || 'プライベートに踏み込みすぎないよう注意しましょう。',
+      title: parsed.title || '最近ふたりで過ごした中で、一番ホッとした瞬間っていつだった？',
+      depthQuestions: Array.isArray(parsed.depthQuestions)
+        ? parsed.depthQuestions
+        : ['そのときどんな気持ちだった？'],
+      expansionTips: parsed.expansionTips || 'まずは自分から少し照れながら話してみると、相手も本音を出しやすくなるよ。',
+      cautionTips: parsed.cautionTips || '違いが見えてもジャッジせず、お互いの気持ちを受け止め合おう。',
       isCustom: true,
     };
   } catch (err) {
@@ -129,26 +134,28 @@ export async function expandTopicWithGemini(
     throw new Error('Gemini APIキーが設定されていません。');
   }
 
-  const model = config.model || 'gemini-1.5-flash';
+  const model = config.model || 'gemini-2.5-flash';
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(config.apiKey)}`;
 
   const prompt = `
-以下の話題について、現在の相手の反応やシチュエーションに合わせて、さらに会話を盛り上げるための「追加の切り返し質問（3つ）」と「アドバイス」を提案してください。
+付き合って2ヶ月程度の恋人同士が、2人でスマホ画面を見ながら以下の質問について話しています。
+現在の流れに合わせて、さらに親密になれる「追加の深掘り質問（3つ）」と「会話のアドバイス」を提案してください。
+口調は恋人同士の自然なタメ口にしてください。
 
-【現在の話題】
+【現在の質問】
 ${topic.title}
 
-【現在の状況・相手の反応】
-${userNote || '相手は少し興味を持って答えてくれましたが、ここからもっと話を広げたいです。'}
+【ここまでの流れ・相手の反応】
+${userNote || 'お互いに答えたところで、ここからもう少し踏み込んで本音や価値観を語り合いたいです。'}
 
 以下のJSONフォーマットのみを返してください。
 {
   "newDepthQuestions": [
-    "相手の反応を受けた次の切り返し質問1",
-    "相手の反応を受けた次の切り返し質問2",
-    "相手の反応を受けた次の切り返し質問3"
+    "さらに踏み込む質問1（タメ口）",
+    "さらに踏み込む質問2（タメ口）",
+    "さらに踏み込む質問3（タメ口）"
   ],
-  "tailoredAdvice": "この状況で会話をスムーズに展開するためのアドバイス"
+  "tailoredAdvice": "2人の距離がもっと縮まるための温かいアドバイス"
 }
 `;
 
@@ -164,7 +171,7 @@ ${userNote || '相手は少し興味を持って答えてくれましたが、�
         },
       ],
       generationConfig: {
-        temperature: 0.7,
+        temperature: 0.75,
         response_mime_type: 'application/json',
       },
     }),

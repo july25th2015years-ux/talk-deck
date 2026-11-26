@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import type { Category, IntimacyLevel, Topic, GeminiConfig } from './types';
-import { PRESET_TOPICS } from './data/topics';
+import { CATEGORIES, PRESET_TOPICS } from './data/topics';
 import { getStoredGeminiConfig, saveStoredGeminiConfig, removeStoredGeminiConfig } from './services/gemini';
 import { Header } from './components/Header';
 import { CategoryFilter } from './components/CategoryFilter';
@@ -14,12 +14,56 @@ import { AiExpandModal } from './components/AiExpandModal';
 import confetti from 'canvas-confetti';
 import { MessageCircleHeart, Sparkles } from 'lucide-react';
 
-const FAVORITES_STORAGE_KEY = 'talkdeck_favorites';
-const SEEN_STORAGE_KEY = 'talkdeck_seen_topic_ids';
+const FAVORITES_STORAGE_KEY = 'talkdeck_couple_favorites_v2';
+const SEEN_STORAGE_KEY = 'talkdeck_couple_seen_ids_v2';
+
+function loadInitialDeckState(): { initialTopic: Topic; initialSeen: Set<string> } {
+  const validPresetIds = new Set(PRESET_TOPICS.map((t) => t.id));
+  try {
+    const raw = localStorage.getItem(SEEN_STORAGE_KEY);
+    if (raw) {
+      const parsed: unknown = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        const cleaned = parsed.filter(
+          (id): id is string => typeof id === 'string' && validPresetIds.has(id)
+        );
+        if (cleaned.length > 0) {
+          const seenSet = new Set(cleaned);
+          const unshown = PRESET_TOPICS.filter((t) => !seenSet.has(t.id));
+          if (unshown.length > 0) {
+            const pick = unshown[Math.floor(Math.random() * unshown.length)];
+            seenSet.add(pick.id);
+            localStorage.setItem(SEEN_STORAGE_KEY, JSON.stringify(Array.from(seenSet)));
+            return { initialTopic: pick, initialSeen: seenSet };
+          }
+          return {
+            initialTopic: PRESET_TOPICS[Math.floor(Math.random() * PRESET_TOPICS.length)],
+            initialSeen: seenSet,
+          };
+        }
+      }
+    }
+  } catch {
+    // Ignore storage errors in private mode
+  }
+
+  const first = PRESET_TOPICS[0];
+  const initialSeen = new Set([first.id]);
+  try {
+    localStorage.setItem(SEEN_STORAGE_KEY, JSON.stringify([first.id]));
+  } catch {
+    // Ignore storage errors
+  }
+  return { initialTopic: first, initialSeen };
+}
 
 export const App: React.FC = () => {
+  const [{ initialTopic, initialSeen }] = useState(() => loadInitialDeckState());
+
   // Config & Modals
-  const [geminiConfig, setGeminiConfig] = useState<GeminiConfig | null>(null);
+  const [geminiConfig, setGeminiConfig] = useState<GeminiConfig | null>(() =>
+    getStoredGeminiConfig()
+  );
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isFavoritesOpen, setIsFavoritesOpen] = useState(false);
   const [isCustomTopicOpen, setIsCustomTopicOpen] = useState(false);
@@ -31,42 +75,30 @@ export const App: React.FC = () => {
 
   // Topics & History
   const [customTopics, setCustomTopics] = useState<Topic[]>([]);
-  const [currentTopic, setCurrentTopic] = useState<Topic>(PRESET_TOPICS[0]);
-  const [history, setHistory] = useState<Topic[]>([PRESET_TOPICS[0]]);
+  const [currentTopic, setCurrentTopic] = useState<Topic>(initialTopic);
+  const [history, setHistory] = useState<Topic[]>([initialTopic]);
   const [historyIndex, setHistoryIndex] = useState(0);
   const [isFlipped, setIsFlipped] = useState(false);
 
   // Cycle tracking (questions shown so far without repetition)
-  const [seenTopicIds, setSeenTopicIds] = useState<Set<string>>(() => {
-    try {
-      const raw = localStorage.getItem(SEEN_STORAGE_KEY);
-      if (raw) {
-        return new Set(JSON.parse(raw));
-      }
-    } catch {}
-    return new Set([PRESET_TOPICS[0].id]);
-  });
+  const [seenTopicIds, setSeenTopicIds] = useState<Set<string>>(initialSeen);
   const [cycleCompletedToast, setCycleCompletedToast] = useState(false);
 
   // Favorites
-  const [favorites, setFavorites] = useState<Topic[]>([]);
-
-  // Load Initial Settings & Favorites
-  useEffect(() => {
-    const storedConfig = getStoredGeminiConfig();
-    if (storedConfig) {
-      setGeminiConfig(storedConfig);
-    }
-
+  const [favorites, setFavorites] = useState<Topic[]>(() => {
     try {
       const savedFavs = localStorage.getItem(FAVORITES_STORAGE_KEY);
       if (savedFavs) {
-        setFavorites(JSON.parse(savedFavs));
+        const parsed: unknown = JSON.parse(savedFavs);
+        if (Array.isArray(parsed)) {
+          return parsed as Topic[];
+        }
       }
     } catch (e) {
       console.error('Failed to load favorites:', e);
     }
-  }, []);
+    return [];
+  });
 
   // Save Favorites on update
   const saveFavorites = (newFavs: Topic[]) => {
@@ -93,6 +125,21 @@ export const App: React.FC = () => {
     return [...customTopics, ...PRESET_TOPICS];
   }, [customTopics]);
 
+  // Topic counts by category (respecting current level filter)
+  const countsByCategory = useMemo(() => {
+    const counts = {} as Record<Category, number>;
+    for (const cat of CATEGORIES) {
+      counts[cat.id] = 0;
+    }
+    for (const topic of allAvailableTopics) {
+      if (selectedLevel === 'all' || topic.level === selectedLevel) {
+        counts.all += 1;
+        counts[topic.category] = (counts[topic.category] ?? 0) + 1;
+      }
+    }
+    return counts;
+  }, [allAvailableTopics, selectedLevel]);
+
   // Filtered Topics based on current selections
   const filteredTopics = useMemo(() => {
     return allAvailableTopics.filter((t) => {
@@ -111,12 +158,10 @@ export const App: React.FC = () => {
   const handleNextTopic = useCallback(() => {
     if (filteredTopics.length === 0) return;
 
-    // 1. Find unshown topics in the current active filter
     const unshown = filteredTopics.filter((t) => !seenTopicIds.has(t.id));
 
-    // 2. If ALL topics in this filter have been shown (1周完了!)
+    // All topics in this filter have been shown (1周完了!)
     if (unshown.length === 0) {
-      // Show celebratory notification
       setCycleCompletedToast(true);
       setTimeout(() => setCycleCompletedToast(false), 3500);
 
@@ -125,20 +170,20 @@ export const App: React.FC = () => {
           particleCount: 60,
           spread: 80,
           origin: { y: 0.6 },
-          colors: ['#a855f7', '#ec4899', '#38bdf8', '#fbbf24'],
+          colors: ['#f43f5e', '#ec4899', '#a855f7', '#fbbf24'],
         });
-      } catch {}
+      } catch {
+        // Ignore confetti errors
+      }
 
-      // Reset seen status for topics belonging to this filter
       const nextSeen = new Set(seenTopicIds);
       filteredTopics.forEach((t) => nextSeen.delete(t.id));
 
-      // Pick a random topic for the new round
-      const candidates = filteredTopics.length > 1
-        ? filteredTopics.filter((t) => t.id !== currentTopic.id)
-        : filteredTopics;
-      const randomIndex = Math.floor(Math.random() * candidates.length);
-      const next = candidates[randomIndex];
+      const candidates =
+        filteredTopics.length > 1
+          ? filteredTopics.filter((t) => t.id !== currentTopic.id)
+          : filteredTopics;
+      const next = candidates[Math.floor(Math.random() * candidates.length)];
 
       nextSeen.add(next.id);
       updateSeenTopicIds(nextSeen);
@@ -153,35 +198,37 @@ export const App: React.FC = () => {
       return;
     }
 
-    // 3. Normal draw: pick strictly from unshown candidates
+    // Normal draw: pick strictly from unshown candidates
     const candidates = unshown.filter((t) => t.id !== currentTopic.id);
     const targetPool = candidates.length > 0 ? candidates : unshown;
-    const randomIndex = Math.floor(Math.random() * targetPool.length);
-    const next = targetPool[randomIndex];
+    const next = targetPool[Math.floor(Math.random() * targetPool.length)];
 
     const nextSeen = new Set(seenTopicIds);
     nextSeen.add(next.id);
     updateSeenTopicIds(nextSeen);
 
-    // If this was the last question of the cycle
     if (unshown.length === 1) {
       try {
         confetti({
-          particleCount: 40,
-          spread: 60,
+          particleCount: 45,
+          spread: 65,
           origin: { y: 0.7 },
-          colors: ['#a855f7', '#ec4899', '#6366f1'],
+          colors: ['#f43f5e', '#ec4899', '#a855f7'],
         });
-      } catch {}
+      } catch {
+        // Ignore confetti errors
+      }
     } else if (next.level === 3) {
       try {
         confetti({
-          particleCount: 25,
+          particleCount: 22,
           spread: 50,
           origin: { y: 0.75 },
-          colors: ['#a855f7', '#ec4899', '#6366f1'],
+          colors: ['#f43f5e', '#ec4899', '#fbbf24'],
         });
-      } catch {}
+      } catch {
+        // Ignore confetti errors
+      }
     }
 
     setIsFlipped(false);
@@ -205,7 +252,7 @@ export const App: React.FC = () => {
 
   // Reset cycle manually
   const handleResetCycle = useCallback(() => {
-    if (window.confirm('現在のカテゴリ・親密度の出題履歴をリセットして、最初からシャッフルしますか？')) {
+    if (window.confirm('表示中のカテゴリ・レベルの履歴をリセットして、最初からシャッフルする？')) {
       const nextSeen = new Set(seenTopicIds);
       filteredTopics.forEach((t) => nextSeen.delete(t.id));
       nextSeen.add(currentTopic.id);
@@ -213,20 +260,68 @@ export const App: React.FC = () => {
     }
   }, [seenTopicIds, filteredTopics, currentTopic.id, updateSeenTopicIds]);
 
-  // If filter changes and current topic doesn't match, pick an unshown one in the new filter
-  useEffect(() => {
-    if (filteredTopics.length > 0) {
-      const isCurrentMatching = filteredTopics.some((t) => t.id === currentTopic.id);
-      if (!isCurrentMatching) {
-        const unshown = filteredTopics.filter((t) => !seenTopicIds.has(t.id));
-        const pool = unshown.length > 0 ? unshown : filteredTopics;
-        const next = pool[Math.floor(Math.random() * pool.length)];
-        setCurrentTopic(next);
-        setIsFlipped(false);
-        updateSeenTopicIds(new Set([...seenTopicIds, next.id]));
+  // Handle Filter Changes cleanly
+  const pickTopicForFilter = useCallback(
+    (nextCat: Category, nextLvl: IntimacyLevel | 'all') => {
+      const matching = allAvailableTopics.filter((t) => {
+        const matchCategory = nextCat === 'all' || t.category === nextCat;
+        const matchLevel = nextLvl === 'all' || t.level === nextLvl;
+        return matchCategory && matchLevel;
+      });
+      if (matching.length === 0) return;
+      if (matching.some((t) => t.id === currentTopic.id)) return;
+
+      const unshown = matching.filter((t) => !seenTopicIds.has(t.id));
+      const pool = unshown.length > 0 ? unshown : matching;
+      const next = pool[Math.floor(Math.random() * pool.length)];
+
+      setCurrentTopic(next);
+      setIsFlipped(false);
+      updateSeenTopicIds(new Set([...seenTopicIds, next.id]));
+
+      const newHistory = history.slice(0, historyIndex + 1);
+      newHistory.push(next);
+      setHistory(newHistory);
+      setHistoryIndex(newHistory.length - 1);
+    },
+    [allAvailableTopics, currentTopic.id, seenTopicIds, updateSeenTopicIds, history, historyIndex]
+  );
+
+  const handleSelectCategory = useCallback(
+    (cat: Category) => {
+      setSelectedCategory(cat);
+      pickTopicForFilter(cat, selectedLevel);
+    },
+    [pickTopicForFilter, selectedLevel]
+  );
+
+  const handleSelectLevel = useCallback(
+    (lvl: IntimacyLevel | 'all') => {
+      setSelectedLevel(lvl);
+      pickTopicForFilter(selectedCategory, lvl);
+    },
+    [pickTopicForFilter, selectedCategory]
+  );
+
+  // Select a topic from Favorites without filter override conflict
+  const handleSelectFavoriteTopic = useCallback(
+    (topic: Topic) => {
+      const matchesCurrent =
+        (selectedCategory === 'all' || topic.category === selectedCategory) &&
+        (selectedLevel === 'all' || topic.level === selectedLevel);
+      if (!matchesCurrent) {
+        setSelectedCategory('all');
+        setSelectedLevel('all');
       }
-    }
-  }, [filteredTopics, currentTopic.id, seenTopicIds, updateSeenTopicIds]);
+      setCurrentTopic(topic);
+      setIsFlipped(false);
+      const newHistory = history.slice(0, historyIndex + 1);
+      newHistory.push(topic);
+      setHistory(newHistory);
+      setHistoryIndex(newHistory.length - 1);
+    },
+    [selectedCategory, selectedLevel, history, historyIndex]
+  );
 
   // Toggle Favorite
   const handleToggleFavorite = () => {
@@ -238,12 +333,14 @@ export const App: React.FC = () => {
     }
   };
 
-  // Keyboard Shortcuts
+  // Keyboard Shortcuts (PC convenience)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Don't trigger if user is typing in an input or textarea
       const target = e.target as HTMLElement;
       if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT') {
+        return;
+      }
+      if (isSettingsOpen || isFavoritesOpen || isCustomTopicOpen || isAiExpandOpen) {
         return;
       }
 
@@ -264,11 +361,20 @@ export const App: React.FC = () => {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleNextTopic, handlePrevTopic]);
+  }, [
+    handleNextTopic,
+    handlePrevTopic,
+    isSettingsOpen,
+    isFavoritesOpen,
+    isCustomTopicOpen,
+    isAiExpandOpen,
+  ]);
 
   // When AI generates a custom topic
   const handleCustomTopicGenerated = (newTopic: Topic) => {
     setCustomTopics((prev) => [newTopic, ...prev]);
+    setSelectedCategory('all');
+    setSelectedLevel('all');
     setCurrentTopic(newTopic);
     setIsFlipped(false);
     updateSeenTopicIds(new Set([...seenTopicIds, newTopic.id]));
@@ -283,9 +389,11 @@ export const App: React.FC = () => {
         particleCount: 40,
         spread: 70,
         origin: { y: 0.6 },
-        colors: ['#a855f7', '#38bdf8', '#fbbf24'],
+        colors: ['#f43f5e', '#a855f7', '#fbbf24'],
       });
-    } catch {}
+    } catch {
+      // Ignore confetti errors
+    }
   };
 
   // Append questions from AI expand
@@ -310,26 +418,26 @@ export const App: React.FC = () => {
 
   const isCurrentFavorite = favorites.some((f) => f.id === currentTopic.id);
 
-  // Daily conversation advice tips
+  // Couple conversation tips
   const tips = [
-    '💡 会話の黄金比は「相手7割・自分3割」。聞き手に回るほど相手は満足します。',
-    '✨ 相手の答えをオウム返ししながら「それいいですね！」と共感すると親近感が急上昇します。',
-    '🤝 会話が途切れても慌てずに。笑顔でうなずくだけで安心感が生まれます。',
-    '🎯 まずは自分から小さな失敗談や具体例を話すと、相手も本音を話しやすくなります。',
+    '💞 答えに正解はないよ。「そういう考え方もあるんだ！」と違いを楽しむと一気に仲良くなれるよ。',
+    '🦁 お金や将来の話も、今は「知れてよかった！」の作戦会議。気楽に本音を出し合ってみてね。',
+    '🌙 ちょっと照れる質問は、まず自分から素直に答えてみると相手も話しやすくなるよ。',
+    '✨ 盛り上がった質問や覚えておきたい本音は、右上のブックマークで残しておけるよ。',
   ];
   const todayTip = tips[new Date().getDate() % tips.length];
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-between selection:bg-indigo-500 selection:text-white relative">
+    <div className="min-h-screen min-h-[100dvh] bg-[#0f0d1a] bg-[radial-gradient(ellipse_at_top,_rgba(244,63,94,0.12),_transparent_55%),radial-gradient(ellipse_at_bottom,_rgba(168,85,247,0.10),_transparent_55%)] text-slate-100 flex flex-col justify-between selection:bg-rose-500 selection:text-white relative overflow-x-hidden safe-top safe-bottom">
       {/* 1周完了トースト通知 */}
       {cycleCompletedToast && (
-        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 bg-gradient-to-r from-purple-600 to-indigo-600 text-white text-xs sm:text-sm font-bold px-5 py-3 rounded-2xl shadow-2xl border border-purple-400/60 flex items-center gap-2 animate-slide-up">
-          <Sparkles className="w-4 h-4 text-amber-300" />
-          <span>🎉 すべての質問を1周しました！デッキをリシャッフルしました</span>
+        <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 w-[90%] max-w-md bg-gradient-to-r from-rose-600 to-purple-600 text-white text-xs sm:text-sm font-bold px-4 py-3 rounded-2xl shadow-2xl border border-rose-300/50 flex items-center justify-center gap-2 animate-slide-up text-center">
+          <Sparkles className="w-4 h-4 text-amber-300 flex-shrink-0" />
+          <span>🎉 このデッキを1周完走！カードをリシャッフルしたよ</span>
         </div>
       )}
 
-      {/* Top Header */}
+      {/* Top Header & Filters */}
       <div>
         <Header
           favoritesCount={favorites.length}
@@ -340,18 +448,19 @@ export const App: React.FC = () => {
         />
 
         {/* Category Filter Tabs */}
-        <div className="pt-3">
+        <div className="pt-2.5 sm:pt-3">
           <CategoryFilter
             selectedCategory={selectedCategory}
-            onSelectCategory={setSelectedCategory}
+            onSelectCategory={handleSelectCategory}
+            countsByCategory={countsByCategory}
           />
         </div>
 
-        {/* Intimacy Level Filter */}
+        {/* Depth Level Filter */}
         <div className="pt-1">
           <LevelFilter
             selectedLevel={selectedLevel}
-            onSelectLevel={setSelectedLevel}
+            onSelectLevel={handleSelectLevel}
           />
         </div>
       </div>
@@ -362,17 +471,18 @@ export const App: React.FC = () => {
           <div className="p-8 text-center text-slate-400 max-w-sm space-y-3">
             <MessageCircleHeart className="w-12 h-12 text-slate-600 mx-auto" />
             <p className="text-sm font-semibold text-slate-300">
-              条件に一致する話題がありません
+              この条件のカードがまだないよ
             </p>
             <p className="text-xs text-slate-500">
-              カテゴリまたは親密度レベルのフィルター条件を変更してください。
+              カテゴリまたは深さレベルのフィルターを変更してみてね。
             </p>
             <button
+              type="button"
               onClick={() => {
                 setSelectedCategory('all');
                 setSelectedLevel('all');
               }}
-              className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-xs font-medium"
+              className="min-h-[40px] px-4 py-2 rounded-xl bg-gradient-to-r from-rose-500 to-purple-600 text-white text-xs font-medium"
             >
               フィルターをリセット
             </button>
@@ -403,13 +513,13 @@ export const App: React.FC = () => {
       </main>
 
       {/* Bottom Advice & Footer */}
-      <footer className="w-full max-w-4xl mx-auto px-4 py-3 sm:py-4 border-t border-slate-900 text-center space-y-2">
-        <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-900/90 border border-slate-800 text-[11px] sm:text-xs text-indigo-300">
-          <Sparkles className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
+      <footer className="w-full max-w-4xl mx-auto px-4 py-3 sm:py-4 border-t border-white/10 text-center space-y-2">
+        <div className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-2xl sm:rounded-full bg-white/5 border border-white/10 text-[11px] sm:text-xs text-rose-200/90 leading-relaxed">
+          <Sparkles className="w-3.5 h-3.5 text-amber-300 flex-shrink-0" />
           <span>{todayTip}</span>
         </div>
-        <p className="text-[11px] text-slate-600">
-          TalkDeck &bull; 雑談ネタ＆深掘り質問アシスタント &bull; GitHub Pages Ready
+        <p className="text-[11px] text-slate-500">
+          TalkDeck &bull; ふたりをもっと知る100の質問
         </p>
       </footer>
 
@@ -426,10 +536,7 @@ export const App: React.FC = () => {
         isOpen={isFavoritesOpen}
         onClose={() => setIsFavoritesOpen(false)}
         favorites={favorites}
-        onSelectTopic={(t) => {
-          setCurrentTopic(t);
-          setIsFlipped(false);
-        }}
+        onSelectTopic={handleSelectFavoriteTopic}
         onRemoveFavorite={(id) => {
           saveFavorites(favorites.filter((f) => f.id !== id));
         }}
