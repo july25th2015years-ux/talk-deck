@@ -1,16 +1,12 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import type { Category, IntimacyLevel, Topic, GeminiConfig } from './types';
+import type { Category, IntimacyLevel, Topic } from './types';
 import { CATEGORIES, PRESET_TOPICS } from './data/topics';
-import { getStoredGeminiConfig, saveStoredGeminiConfig, removeStoredGeminiConfig } from './services/gemini';
 import { Header } from './components/Header';
 import { CategoryFilter } from './components/CategoryFilter';
 import { LevelFilter } from './components/LevelFilter';
 import { TopicCard } from './components/TopicCard';
 import { ActionButtons } from './components/ActionButtons';
-import { SettingsModal } from './components/SettingsModal';
 import { FavoritesDrawer } from './components/FavoritesDrawer';
-import { CustomTopicModal } from './components/CustomTopicModal';
-import { AiExpandModal } from './components/AiExpandModal';
 import confetti from 'canvas-confetti';
 import { MessageCircleHeart, Sparkles } from 'lucide-react';
 
@@ -60,21 +56,14 @@ function loadInitialDeckState(): { initialTopic: Topic; initialSeen: Set<string>
 export const App: React.FC = () => {
   const [{ initialTopic, initialSeen }] = useState(() => loadInitialDeckState());
 
-  // Config & Modals
-  const [geminiConfig, setGeminiConfig] = useState<GeminiConfig | null>(() =>
-    getStoredGeminiConfig()
-  );
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  // Drawer
   const [isFavoritesOpen, setIsFavoritesOpen] = useState(false);
-  const [isCustomTopicOpen, setIsCustomTopicOpen] = useState(false);
-  const [isAiExpandOpen, setIsAiExpandOpen] = useState(false);
 
   // Filters
   const [selectedCategory, setSelectedCategory] = useState<Category>('all');
   const [selectedLevel, setSelectedLevel] = useState<IntimacyLevel | 'all'>('all');
 
   // Topics & History
-  const [customTopics, setCustomTopics] = useState<Topic[]>([]);
   const [currentTopic, setCurrentTopic] = useState<Topic>(initialTopic);
   const [history, setHistory] = useState<Topic[]>([initialTopic]);
   const [historyIndex, setHistoryIndex] = useState(0);
@@ -120,34 +109,29 @@ export const App: React.FC = () => {
     }
   }, []);
 
-  // Combine Preset + Custom Topics
-  const allAvailableTopics = useMemo(() => {
-    return [...customTopics, ...PRESET_TOPICS];
-  }, [customTopics]);
-
   // Topic counts by category (respecting current level filter)
   const countsByCategory = useMemo(() => {
     const counts = {} as Record<Category, number>;
     for (const cat of CATEGORIES) {
       counts[cat.id] = 0;
     }
-    for (const topic of allAvailableTopics) {
+    for (const topic of PRESET_TOPICS) {
       if (selectedLevel === 'all' || topic.level === selectedLevel) {
         counts.all += 1;
         counts[topic.category] = (counts[topic.category] ?? 0) + 1;
       }
     }
     return counts;
-  }, [allAvailableTopics, selectedLevel]);
+  }, [selectedLevel]);
 
   // Filtered Topics based on current selections
   const filteredTopics = useMemo(() => {
-    return allAvailableTopics.filter((t) => {
+    return PRESET_TOPICS.filter((t) => {
       const matchCategory = selectedCategory === 'all' || t.category === selectedCategory;
       const matchLevel = selectedLevel === 'all' || t.level === selectedLevel;
       return matchCategory && matchLevel;
     });
-  }, [allAvailableTopics, selectedCategory, selectedLevel]);
+  }, [selectedCategory, selectedLevel]);
 
   // Count of topics in current filter that have been seen
   const seenInFilterCount = useMemo(() => {
@@ -263,7 +247,7 @@ export const App: React.FC = () => {
   // Handle Filter Changes cleanly
   const pickTopicForFilter = useCallback(
     (nextCat: Category, nextLvl: IntimacyLevel | 'all') => {
-      const matching = allAvailableTopics.filter((t) => {
+      const matching = PRESET_TOPICS.filter((t) => {
         const matchCategory = nextCat === 'all' || t.category === nextCat;
         const matchLevel = nextLvl === 'all' || t.level === nextLvl;
         return matchCategory && matchLevel;
@@ -284,7 +268,7 @@ export const App: React.FC = () => {
       setHistory(newHistory);
       setHistoryIndex(newHistory.length - 1);
     },
-    [allAvailableTopics, currentTopic.id, seenTopicIds, updateSeenTopicIds, history, historyIndex]
+    [currentTopic.id, seenTopicIds, updateSeenTopicIds, history, historyIndex]
   );
 
   const handleSelectCategory = useCallback(
@@ -340,7 +324,7 @@ export const App: React.FC = () => {
       if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT') {
         return;
       }
-      if (isSettingsOpen || isFavoritesOpen || isCustomTopicOpen || isAiExpandOpen) {
+      if (isFavoritesOpen) {
         return;
       }
 
@@ -361,60 +345,7 @@ export const App: React.FC = () => {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [
-    handleNextTopic,
-    handlePrevTopic,
-    isSettingsOpen,
-    isFavoritesOpen,
-    isCustomTopicOpen,
-    isAiExpandOpen,
-  ]);
-
-  // When AI generates a custom topic
-  const handleCustomTopicGenerated = (newTopic: Topic) => {
-    setCustomTopics((prev) => [newTopic, ...prev]);
-    setSelectedCategory('all');
-    setSelectedLevel('all');
-    setCurrentTopic(newTopic);
-    setIsFlipped(false);
-    updateSeenTopicIds(new Set([...seenTopicIds, newTopic.id]));
-
-    const newHistory = history.slice(0, historyIndex + 1);
-    newHistory.push(newTopic);
-    setHistory(newHistory);
-    setHistoryIndex(newHistory.length - 1);
-
-    try {
-      confetti({
-        particleCount: 40,
-        spread: 70,
-        origin: { y: 0.6 },
-        colors: ['#f43f5e', '#a855f7', '#fbbf24'],
-      });
-    } catch {
-      // Ignore confetti errors
-    }
-  };
-
-  // Append questions from AI expand
-  const handleAppendQuestions = (newQuestions: string[], newAdvice: string) => {
-    setCurrentTopic((prev) => ({
-      ...prev,
-      depthQuestions: [...prev.depthQuestions, ...newQuestions],
-      expansionTips: `${prev.expansionTips} 【AIアドバイス】${newAdvice}`,
-    }));
-  };
-
-  // Config handlers
-  const handleSaveConfig = (cfg: GeminiConfig) => {
-    setGeminiConfig(cfg);
-    saveStoredGeminiConfig(cfg);
-  };
-
-  const handleRemoveConfig = () => {
-    setGeminiConfig(null);
-    removeStoredGeminiConfig();
-  };
+  }, [handleNextTopic, handlePrevTopic, isFavoritesOpen]);
 
   const isCurrentFavorite = favorites.some((f) => f.id === currentTopic.id);
 
@@ -442,9 +373,6 @@ export const App: React.FC = () => {
         <Header
           favoritesCount={favorites.length}
           onOpenFavorites={() => setIsFavoritesOpen(true)}
-          onOpenSettings={() => setIsSettingsOpen(true)}
-          onOpenCustomTopic={() => setIsCustomTopicOpen(true)}
-          hasApiKey={!!geminiConfig?.apiKey}
         />
 
         {/* Category Filter Tabs */}
@@ -495,7 +423,6 @@ export const App: React.FC = () => {
               onFlip={() => setIsFlipped((prev) => !prev)}
               isFavorite={isCurrentFavorite}
               onToggleFavorite={handleToggleFavorite}
-              onOpenAiExpand={() => setIsAiExpandOpen(true)}
             />
 
             <ActionButtons
@@ -523,15 +450,7 @@ export const App: React.FC = () => {
         </p>
       </footer>
 
-      {/* Modals & Drawers */}
-      <SettingsModal
-        isOpen={isSettingsOpen}
-        onClose={() => setIsSettingsOpen(false)}
-        config={geminiConfig}
-        onSaveConfig={handleSaveConfig}
-        onRemoveConfig={handleRemoveConfig}
-      />
-
+      {/* Favorites Drawer */}
       <FavoritesDrawer
         isOpen={isFavoritesOpen}
         onClose={() => setIsFavoritesOpen(false)}
@@ -543,23 +462,6 @@ export const App: React.FC = () => {
         onClearAll={() => {
           saveFavorites([]);
         }}
-      />
-
-      <CustomTopicModal
-        isOpen={isCustomTopicOpen}
-        onClose={() => setIsCustomTopicOpen(false)}
-        config={geminiConfig}
-        onTopicGenerated={handleCustomTopicGenerated}
-        onOpenSettings={() => setIsSettingsOpen(true)}
-      />
-
-      <AiExpandModal
-        isOpen={isAiExpandOpen}
-        onClose={() => setIsAiExpandOpen(false)}
-        topic={currentTopic}
-        config={geminiConfig}
-        onOpenSettings={() => setIsSettingsOpen(true)}
-        onAppendQuestions={handleAppendQuestions}
       />
     </div>
   );

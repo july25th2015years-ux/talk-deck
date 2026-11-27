@@ -10,8 +10,6 @@ import {
   Lightbulb,
   Compass,
   HeartHandshake,
-  Sparkles,
-  Wand2,
 } from 'lucide-react';
 
 interface TopicCardProps {
@@ -20,7 +18,6 @@ interface TopicCardProps {
   onFlip: () => void;
   isFavorite: boolean;
   onToggleFavorite: () => void;
-  onOpenAiExpand?: () => void;
 }
 
 export const TopicCard: React.FC<TopicCardProps> = ({
@@ -29,7 +26,6 @@ export const TopicCard: React.FC<TopicCardProps> = ({
   onFlip,
   isFavorite,
   onToggleFavorite,
-  onOpenAiExpand,
 }) => {
   const [copiedText, setCopiedText] = useState<string | null>(null);
 
@@ -102,12 +98,6 @@ export const TopicCard: React.FC<TopicCardProps> = ({
                 >
                   {levelBadge.label}
                 </span>
-                {topic.isCustom && (
-                  <span className="text-[11px] sm:text-xs px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-200 font-medium border border-purple-400/30 flex items-center gap-1">
-                    <Sparkles className="w-3 h-3" />
-                    AI生成
-                  </span>
-                )}
               </div>
 
               <div className="flex items-center gap-1.5 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
@@ -240,7 +230,7 @@ export const TopicCard: React.FC<TopicCardProps> = ({
             </div>
 
             {/* Bottom Back Actions */}
-            <div className="pt-3 border-t border-white/10 flex items-center justify-between gap-2 flex-wrap">
+            <div className="pt-3 border-t border-white/10 flex items-center justify-start">
               <button
                 type="button"
                 onClick={onFlip}
@@ -248,17 +238,6 @@ export const TopicCard: React.FC<TopicCardProps> = ({
               >
                 <span>&larr; 質問カードに戻る</span>
               </button>
-
-              {onOpenAiExpand && (
-                <button
-                  type="button"
-                  onClick={onOpenAiExpand}
-                  className="min-h-[36px] text-xs px-3 py-1.5 rounded-xl bg-gradient-to-r from-rose-500 to-purple-600 hover:from-rose-400 hover:to-purple-500 active:scale-95 text-white font-medium flex items-center gap-1.5 shadow-sm transition"
-                >
-                  <Wand2 className="w-3.5 h-3.5" />
-                  AIでさらに広げる
-                </button>
-              )}
             </div>
           </div>
         )}

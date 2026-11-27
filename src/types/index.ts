@@ -17,7 +17,6 @@ export interface Topic {
   depthQuestions: string[];
   expansionTips: string;
   cautionTips?: string;
-  isCustom?: boolean;
 }
 
 export interface CategoryMetadata {
@@ -30,9 +29,4 @@ export interface CategoryMetadata {
   borderColor: string;
   badgeBg: string;
   badgeText: string;
-}
-
-export interface GeminiConfig {
-  apiKey: string;
-  model: string;
 }
