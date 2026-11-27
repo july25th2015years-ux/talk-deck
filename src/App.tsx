@@ -1,14 +1,12 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import type { Category, IntimacyLevel, Topic } from './types';
-import { CATEGORIES, PRESET_TOPICS } from './data/topics';
+import type { Topic } from './types';
+import { PRESET_TOPICS } from './data/topics';
 import { Header } from './components/Header';
-import { CategoryFilter } from './components/CategoryFilter';
-import { LevelFilter } from './components/LevelFilter';
 import { TopicCard } from './components/TopicCard';
 import { ActionButtons } from './components/ActionButtons';
 import { FavoritesDrawer } from './components/FavoritesDrawer';
 import confetti from 'canvas-confetti';
-import { MessageCircleHeart, Sparkles } from 'lucide-react';
+import { Sparkles } from 'lucide-react';
 
 const FAVORITES_STORAGE_KEY = 'talkdeck_couple_favorites_v2';
 const SEEN_STORAGE_KEY = 'talkdeck_couple_seen_ids_v2';
@@ -59,10 +57,6 @@ export const App: React.FC = () => {
   // Drawer
   const [isFavoritesOpen, setIsFavoritesOpen] = useState(false);
 
-  // Filters
-  const [selectedCategory, setSelectedCategory] = useState<Category>('all');
-  const [selectedLevel, setSelectedLevel] = useState<IntimacyLevel | 'all'>('all');
-
   // Topics & History
   const [currentTopic, setCurrentTopic] = useState<Topic>(initialTopic);
   const [history, setHistory] = useState<Topic[]>([initialTopic]);
@@ -109,42 +103,18 @@ export const App: React.FC = () => {
     }
   }, []);
 
-  // Topic counts by category (respecting current level filter)
-  const countsByCategory = useMemo(() => {
-    const counts = {} as Record<Category, number>;
-    for (const cat of CATEGORIES) {
-      counts[cat.id] = 0;
-    }
-    for (const topic of PRESET_TOPICS) {
-      if (selectedLevel === 'all' || topic.level === selectedLevel) {
-        counts.all += 1;
-        counts[topic.category] = (counts[topic.category] ?? 0) + 1;
-      }
-    }
-    return counts;
-  }, [selectedLevel]);
+  // Count of topics that have been seen
+  const seenCount = useMemo(() => {
+    return PRESET_TOPICS.filter((t) => seenTopicIds.has(t.id)).length;
+  }, [seenTopicIds]);
 
-  // Filtered Topics based on current selections
-  const filteredTopics = useMemo(() => {
-    return PRESET_TOPICS.filter((t) => {
-      const matchCategory = selectedCategory === 'all' || t.category === selectedCategory;
-      const matchLevel = selectedLevel === 'all' || t.level === selectedLevel;
-      return matchCategory && matchLevel;
-    });
-  }, [selectedCategory, selectedLevel]);
-
-  // Count of topics in current filter that have been seen
-  const seenInFilterCount = useMemo(() => {
-    return filteredTopics.filter((t) => seenTopicIds.has(t.id)).length;
-  }, [filteredTopics, seenTopicIds]);
-
-  // Draw Next Topic (Guarantees NO repeats until full cycle finishes)
+  // Draw Next Topic (Guarantees NO repeats until full 100-question cycle finishes)
   const handleNextTopic = useCallback(() => {
-    if (filteredTopics.length === 0) return;
+    if (PRESET_TOPICS.length === 0) return;
 
-    const unshown = filteredTopics.filter((t) => !seenTopicIds.has(t.id));
+    const unshown = PRESET_TOPICS.filter((t) => !seenTopicIds.has(t.id));
 
-    // All topics in this filter have been shown (1周完了!)
+    // All 100 topics have been shown (1周完了!)
     if (unshown.length === 0) {
       setCycleCompletedToast(true);
       setTimeout(() => setCycleCompletedToast(false), 3500);
@@ -160,17 +130,13 @@ export const App: React.FC = () => {
         // Ignore confetti errors
       }
 
-      const nextSeen = new Set(seenTopicIds);
-      filteredTopics.forEach((t) => nextSeen.delete(t.id));
-
       const candidates =
-        filteredTopics.length > 1
-          ? filteredTopics.filter((t) => t.id !== currentTopic.id)
-          : filteredTopics;
+        PRESET_TOPICS.length > 1
+          ? PRESET_TOPICS.filter((t) => t.id !== currentTopic.id)
+          : PRESET_TOPICS;
       const next = candidates[Math.floor(Math.random() * candidates.length)];
 
-      nextSeen.add(next.id);
-      updateSeenTopicIds(nextSeen);
+      updateSeenTopicIds(new Set([next.id]));
 
       setIsFlipped(false);
       setCurrentTopic(next);
@@ -222,7 +188,7 @@ export const App: React.FC = () => {
     newHistory.push(next);
     setHistory(newHistory);
     setHistoryIndex(newHistory.length - 1);
-  }, [filteredTopics, seenTopicIds, currentTopic.id, history, historyIndex, updateSeenTopicIds]);
+  }, [seenTopicIds, currentTopic.id, history, historyIndex, updateSeenTopicIds]);
 
   // Navigate Previous Topic in History
   const handlePrevTopic = useCallback(() => {
@@ -236,67 +202,14 @@ export const App: React.FC = () => {
 
   // Reset cycle manually
   const handleResetCycle = useCallback(() => {
-    if (window.confirm('表示中のカテゴリ・レベルの履歴をリセットして、最初からシャッフルする？')) {
-      const nextSeen = new Set(seenTopicIds);
-      filteredTopics.forEach((t) => nextSeen.delete(t.id));
-      nextSeen.add(currentTopic.id);
-      updateSeenTopicIds(nextSeen);
+    if (window.confirm('これまでに出た質問の履歴をリセットして、100問を最初からシャッフルする？')) {
+      updateSeenTopicIds(new Set([currentTopic.id]));
     }
-  }, [seenTopicIds, filteredTopics, currentTopic.id, updateSeenTopicIds]);
+  }, [currentTopic.id, updateSeenTopicIds]);
 
-  // Handle Filter Changes cleanly
-  const pickTopicForFilter = useCallback(
-    (nextCat: Category, nextLvl: IntimacyLevel | 'all') => {
-      const matching = PRESET_TOPICS.filter((t) => {
-        const matchCategory = nextCat === 'all' || t.category === nextCat;
-        const matchLevel = nextLvl === 'all' || t.level === nextLvl;
-        return matchCategory && matchLevel;
-      });
-      if (matching.length === 0) return;
-      if (matching.some((t) => t.id === currentTopic.id)) return;
-
-      const unshown = matching.filter((t) => !seenTopicIds.has(t.id));
-      const pool = unshown.length > 0 ? unshown : matching;
-      const next = pool[Math.floor(Math.random() * pool.length)];
-
-      setCurrentTopic(next);
-      setIsFlipped(false);
-      updateSeenTopicIds(new Set([...seenTopicIds, next.id]));
-
-      const newHistory = history.slice(0, historyIndex + 1);
-      newHistory.push(next);
-      setHistory(newHistory);
-      setHistoryIndex(newHistory.length - 1);
-    },
-    [currentTopic.id, seenTopicIds, updateSeenTopicIds, history, historyIndex]
-  );
-
-  const handleSelectCategory = useCallback(
-    (cat: Category) => {
-      setSelectedCategory(cat);
-      pickTopicForFilter(cat, selectedLevel);
-    },
-    [pickTopicForFilter, selectedLevel]
-  );
-
-  const handleSelectLevel = useCallback(
-    (lvl: IntimacyLevel | 'all') => {
-      setSelectedLevel(lvl);
-      pickTopicForFilter(selectedCategory, lvl);
-    },
-    [pickTopicForFilter, selectedCategory]
-  );
-
-  // Select a topic from Favorites without filter override conflict
+  // Select a topic from Favorites
   const handleSelectFavoriteTopic = useCallback(
     (topic: Topic) => {
-      const matchesCurrent =
-        (selectedCategory === 'all' || topic.category === selectedCategory) &&
-        (selectedLevel === 'all' || topic.level === selectedLevel);
-      if (!matchesCurrent) {
-        setSelectedCategory('all');
-        setSelectedLevel('all');
-      }
       setCurrentTopic(topic);
       setIsFlipped(false);
       const newHistory = history.slice(0, historyIndex + 1);
@@ -304,7 +217,7 @@ export const App: React.FC = () => {
       setHistory(newHistory);
       setHistoryIndex(newHistory.length - 1);
     },
-    [selectedCategory, selectedLevel, history, historyIndex]
+    [history, historyIndex]
   );
 
   // Toggle Favorite
@@ -364,79 +277,36 @@ export const App: React.FC = () => {
       {cycleCompletedToast && (
         <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 w-[90%] max-w-md bg-gradient-to-r from-rose-600 to-purple-600 text-white text-xs sm:text-sm font-bold px-4 py-3 rounded-2xl shadow-2xl border border-rose-300/50 flex items-center justify-center gap-2 animate-slide-up text-center">
           <Sparkles className="w-4 h-4 text-amber-300 flex-shrink-0" />
-          <span>🎉 このデッキを1周完走！カードをリシャッフルしたよ</span>
+          <span>🎉 100問を1周完走！カードをリシャッフルしたよ</span>
         </div>
       )}
 
-      {/* Top Header & Filters */}
-      <div>
-        <Header
-          favoritesCount={favorites.length}
-          onOpenFavorites={() => setIsFavoritesOpen(true)}
-        />
-
-        {/* Category Filter Tabs */}
-        <div className="pt-2.5 sm:pt-3">
-          <CategoryFilter
-            selectedCategory={selectedCategory}
-            onSelectCategory={handleSelectCategory}
-            countsByCategory={countsByCategory}
-          />
-        </div>
-
-        {/* Depth Level Filter */}
-        <div className="pt-1">
-          <LevelFilter
-            selectedLevel={selectedLevel}
-            onSelectLevel={handleSelectLevel}
-          />
-        </div>
-      </div>
+      {/* Top Header */}
+      <Header
+        favoritesCount={favorites.length}
+        onOpenFavorites={() => setIsFavoritesOpen(true)}
+      />
 
       {/* Main Card View */}
       <main className="flex-1 flex flex-col items-center justify-center py-2">
-        {filteredTopics.length === 0 ? (
-          <div className="p-8 text-center text-slate-400 max-w-sm space-y-3">
-            <MessageCircleHeart className="w-12 h-12 text-slate-600 mx-auto" />
-            <p className="text-sm font-semibold text-slate-300">
-              この条件のカードがまだないよ
-            </p>
-            <p className="text-xs text-slate-500">
-              カテゴリまたは深さレベルのフィルターを変更してみてね。
-            </p>
-            <button
-              type="button"
-              onClick={() => {
-                setSelectedCategory('all');
-                setSelectedLevel('all');
-              }}
-              className="min-h-[40px] px-4 py-2 rounded-xl bg-gradient-to-r from-rose-500 to-purple-600 text-white text-xs font-medium"
-            >
-              フィルターをリセット
-            </button>
-          </div>
-        ) : (
-          <>
-            <TopicCard
-              topic={currentTopic}
-              isFlipped={isFlipped}
-              onFlip={() => setIsFlipped((prev) => !prev)}
-              isFavorite={isCurrentFavorite}
-              onToggleFavorite={handleToggleFavorite}
-            />
+        <TopicCard
+          topic={currentTopic}
+          isFlipped={isFlipped}
+          onFlip={() => setIsFlipped((prev) => !prev)}
+          isFavorite={isCurrentFavorite}
+          onToggleFavorite={handleToggleFavorite}
+        />
 
-            <ActionButtons
-              onNext={handleNextTopic}
-              onPrev={handlePrevTopic}
-              canPrev={historyIndex > 0}
-              onFlip={() => setIsFlipped((prev) => !prev)}
-              isFlipped={isFlipped}
-              seenCount={seenInFilterCount}
-              totalCount={filteredTopics.length}
-              onResetCycle={handleResetCycle}
-            />
-          </>
-        )}
+        <ActionButtons
+          onNext={handleNextTopic}
+          onPrev={handlePrevTopic}
+          canPrev={historyIndex > 0}
+          onFlip={() => setIsFlipped((prev) => !prev)}
+          isFlipped={isFlipped}
+          seenCount={seenCount}
+          totalCount={PRESET_TOPICS.length}
+          onResetCycle={handleResetCycle}
+        />
       </main>
 
       {/* Bottom Advice & Footer */}

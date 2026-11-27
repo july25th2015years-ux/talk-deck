@@ -16,18 +16,12 @@ export const Header: React.FC<HeaderProps> = ({
         <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-tr from-rose-500 via-pink-500 to-purple-500 flex items-center justify-center shadow-lg shadow-rose-500/25 flex-shrink-0">
           <Heart className="w-4 h-4 sm:w-5 sm:h-5 text-white fill-white/90" />
         </div>
-        <div className="min-w-0 flex-1">
-          <h1 className="text-base sm:text-2xl font-bold bg-gradient-to-r from-white via-rose-100 to-pink-200 bg-clip-text text-transparent flex items-center gap-1.5 sm:gap-2">
-            <span className="truncate">TalkDeck</span>
-            <span className="text-[10px] sm:text-xs px-1.5 sm:px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-200 font-medium border border-rose-400/30 whitespace-nowrap flex-shrink-0">
-              ふたりの100問
-            </span>
-          </h1>
-          <p className="text-[11px] sm:text-xs text-slate-400 truncate">
-            <span className="sm:hidden">付き合って2ヶ月のトークデッキ</span>
-            <span className="hidden sm:inline">付き合って2ヶ月、もっと深く知り合うトークデッキ</span>
-          </p>
-        </div>
+        <h1 className="text-base sm:text-2xl font-bold bg-gradient-to-r from-white via-rose-100 to-pink-200 bg-clip-text text-transparent flex items-center gap-1.5 sm:gap-2 min-w-0">
+          <span className="truncate">TalkDeck</span>
+          <span className="text-[10px] sm:text-xs px-1.5 sm:px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-200 font-medium border border-rose-400/30 whitespace-nowrap flex-shrink-0">
+            ふたりの100問
+          </span>
+        </h1>
       </div>
 
       <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
